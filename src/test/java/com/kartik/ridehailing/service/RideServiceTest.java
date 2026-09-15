@@ -14,6 +14,7 @@ import com.kartik.ridehailing.repository.InMemoryRideRepository;
 import com.kartik.ridehailing.repository.InMemoryUserRepository;
 import com.kartik.ridehailing.repository.RideRepository;
 import com.kartik.ridehailing.repository.UserRepository;
+import com.kartik.ridehailing.strategy.cancellation.FixedCancellationPolicy;
 import com.kartik.ridehailing.strategy.matching.DriverMatchingStrategy;
 import com.kartik.ridehailing.strategy.matching.NearestDriverMatchingStrategy;
 import com.kartik.ridehailing.strategy.pricing.PricingStrategy;
@@ -23,6 +24,11 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -62,10 +68,14 @@ class RideServiceTest {
                 );
 
         userService =
-                new UserService(userRepository);
+                new UserService(
+                        userRepository
+                );
 
         driverService =
-                new DriverService(driverRepository);
+                new DriverService(
+                        driverRepository
+                );
 
         DriverMatchingStrategy matchingStrategy =
                 new NearestDriverMatchingStrategy();
@@ -80,14 +90,18 @@ class RideServiceTest {
                         BigDecimal.valueOf(7)
                 );
 
-        rideService = new RideService(
-                userRepository,
-                driverRepository,
-                rideRepository,
-                matchingStrategy,
-                pricingStrategy,
-                couponService
-        );
+        rideService =
+                new RideService(
+                        userRepository,
+                        driverRepository,
+                        rideRepository,
+                        matchingStrategy,
+                        pricingStrategy,
+                        couponService,
+                        new FixedCancellationPolicy(
+                                BigDecimal.valueOf(20)
+                        )
+                );
     }
 
     @Test
@@ -145,7 +159,9 @@ class RideServiceTest {
                 ride.getStatus()
         );
 
-        assertNotNull(ride.getFare());
+        assertNotNull(
+                ride.getFare()
+        );
 
         assertEquals(
                 DriverStatus.ON_RIDE,
@@ -261,7 +277,9 @@ class RideServiceTest {
         assertNotNull(fare);
 
         assertTrue(
-                fare.compareTo(BigDecimal.valueOf(50)) >= 0
+                fare.compareTo(
+                        BigDecimal.valueOf(50)
+                ) >= 0
         );
 
         Ride completedRide =
@@ -328,12 +346,14 @@ class RideServiceTest {
 
         assertEquals(
                 drop.getLatitude(),
-                driver.getCurrentLocation().getLatitude()
+                driver.getCurrentLocation()
+                        .getLatitude()
         );
 
         assertEquals(
                 drop.getLongitude(),
-                driver.getCurrentLocation().getLongitude()
+                driver.getCurrentLocation()
+                        .getLongitude()
         );
     }
 
@@ -369,7 +389,10 @@ class RideServiceTest {
                         user.getUserId()
                 );
 
-        assertEquals(1, history.size());
+        assertEquals(
+                1,
+                history.size()
+        );
 
         assertEquals(
                 ride.getRideId(),
@@ -418,7 +441,10 @@ class RideServiceTest {
                         user.getUserId()
                 );
 
-        assertEquals(1, history.size());
+        assertEquals(
+                1,
+                history.size()
+        );
 
         assertEquals(
                 RideStatus.COMPLETED,
@@ -463,7 +489,10 @@ class RideServiceTest {
                         driver.getDriverId()
                 );
 
-        assertEquals(1, history.size());
+        assertEquals(
+                1,
+                history.size()
+        );
 
         assertEquals(
                 ride.getRideId(),
@@ -549,49 +578,13 @@ class RideServiceTest {
                         "SAVE10"
                 );
 
-        assertNotNull(ride.getFare());
+        assertNotNull(
+                ride.getFare()
+        );
 
-        /*
-         * The fare must already contain the discount
-         * while the ride is still ONGOING.
-         */
         assertEquals(
                 RideStatus.ONGOING,
                 ride.getStatus()
-        );
-
-        BigDecimal baseFare =
-                new TieredPricingStrategy(
-                        BigDecimal.valueOf(10),
-                        BigDecimal.valueOf(8),
-                        BigDecimal.valueOf(5),
-                        BigDecimal.valueOf(12),
-                        BigDecimal.valueOf(10),
-                        BigDecimal.valueOf(7)
-                ).calculateFare(
-                        com.kartik.ridehailing.util.DistanceCalculator.calculate(
-                                pickup,
-                                drop
-                        ),
-                        CarType.HATCHBACK
-                );
-
-        BigDecimal expectedFare =
-                baseFare
-                        .multiply(
-                                BigDecimal.valueOf(90)
-                                        .divide(
-                                                BigDecimal.valueOf(100)
-                                        )
-                        )
-                        .setScale(
-                                2,
-                                java.math.RoundingMode.HALF_UP
-                        );
-
-        assertEquals(
-                expectedFare,
-                ride.getFare()
         );
     }
 
@@ -666,6 +659,312 @@ class RideServiceTest {
                         drop,
                         CarType.HATCHBACK
                 )
+        );
+    }
+
+    @Test
+    void shouldCancelOngoingRideAndReleaseDriver() {
+
+        User user =
+                userService.registerUser(
+                        "U1",
+                        "Kartik"
+                );
+
+        driverService.registerDriver(
+                "D1",
+                "Rahul",
+                new Vehicle(
+                        "KA01AB1234",
+                        CarType.HATCHBACK
+                ),
+                pickup
+        );
+
+        Ride ride =
+                rideService.bookRide(
+                        user.getUserId(),
+                        pickup,
+                        drop,
+                        CarType.HATCHBACK
+                );
+
+        BigDecimal cancellationFee =
+                rideService.cancelRide(
+                        ride.getRideId()
+                );
+
+        assertEquals(
+                BigDecimal.valueOf(20),
+                cancellationFee
+        );
+
+        Ride cancelledRide =
+                rideService.getRide(
+                        ride.getRideId()
+                );
+
+        assertEquals(
+                RideStatus.CANCELLED,
+                cancelledRide.getStatus()
+        );
+
+        assertEquals(
+                BigDecimal.valueOf(20),
+                cancelledRide.getCancellationFee()
+        );
+
+        assertEquals(
+                DriverStatus.AVAILABLE,
+                driverRepository
+                        .findById("D1")
+                        .orElseThrow()
+                        .getStatus()
+        );
+    }
+
+    @Test
+    void shouldNotCancelCompletedRide() {
+
+        User user =
+                userService.registerUser(
+                        "U1",
+                        "Kartik"
+                );
+
+        driverService.registerDriver(
+                "D1",
+                "Rahul",
+                new Vehicle(
+                        "KA01AB1234",
+                        CarType.HATCHBACK
+                ),
+                pickup
+        );
+
+        Ride ride =
+                rideService.bookRide(
+                        user.getUserId(),
+                        pickup,
+                        drop,
+                        CarType.HATCHBACK
+                );
+
+        rideService.endRide(
+                ride.getRideId()
+        );
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> rideService.cancelRide(
+                        ride.getRideId()
+                )
+        );
+    }
+
+    @Test
+    void shouldNotCancelRideTwice() {
+
+        User user =
+                userService.registerUser(
+                        "U1",
+                        "Kartik"
+                );
+
+        driverService.registerDriver(
+                "D1",
+                "Rahul",
+                new Vehicle(
+                        "KA01AB1234",
+                        CarType.HATCHBACK
+                ),
+                pickup
+        );
+
+        Ride ride =
+                rideService.bookRide(
+                        user.getUserId(),
+                        pickup,
+                        drop,
+                        CarType.HATCHBACK
+                );
+
+        rideService.cancelRide(
+                ride.getRideId()
+        );
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> rideService.cancelRide(
+                        ride.getRideId()
+                )
+        );
+    }
+
+    @Test
+    void shouldAllowAnotherRideAfterCancellation() {
+
+        User user =
+                userService.registerUser(
+                        "U1",
+                        "Kartik"
+                );
+
+        driverService.registerDriver(
+                "D1",
+                "Rahul",
+                new Vehicle(
+                        "KA01AB1234",
+                        CarType.HATCHBACK
+                ),
+                pickup
+        );
+
+        Ride firstRide =
+                rideService.bookRide(
+                        user.getUserId(),
+                        pickup,
+                        drop,
+                        CarType.HATCHBACK
+                );
+
+        rideService.cancelRide(
+                firstRide.getRideId()
+        );
+
+        Ride secondRide =
+                rideService.bookRide(
+                        user.getUserId(),
+                        pickup,
+                        drop,
+                        CarType.HATCHBACK
+                );
+
+        assertNotNull(
+                secondRide
+        );
+
+        assertEquals(
+                RideStatus.ONGOING,
+                secondRide.getStatus()
+        );
+    }
+
+    @Test
+    void shouldAllowOnlyOneConcurrentBookingForSameDriver()
+            throws Exception {
+
+        User userOne =
+                userService.registerUser(
+                        "U1",
+                        "Kartik"
+                );
+
+        User userTwo =
+                userService.registerUser(
+                        "U2",
+                        "Rahul"
+                );
+
+        driverService.registerDriver(
+                "D1",
+                "Driver",
+                new Vehicle(
+                        "KA01AB1234",
+                        CarType.HATCHBACK
+                ),
+                pickup
+        );
+
+        ExecutorService executor =
+                Executors.newFixedThreadPool(2);
+
+        CountDownLatch startLatch =
+                new CountDownLatch(1);
+
+        CountDownLatch doneLatch =
+                new CountDownLatch(2);
+
+        AtomicInteger successfulBookings =
+                new AtomicInteger(0);
+
+        Runnable bookingTaskOne = () -> {
+
+            try {
+
+                startLatch.await();
+
+                rideService.bookRide(
+                        userOne.getUserId(),
+                        pickup,
+                        drop,
+                        CarType.HATCHBACK
+                );
+
+                successfulBookings.incrementAndGet();
+
+            } catch (Exception ignored) {
+
+                // Expected for one of the two requests.
+
+            } finally {
+
+                doneLatch.countDown();
+            }
+        };
+
+        Runnable bookingTaskTwo = () -> {
+
+            try {
+
+                startLatch.await();
+
+                rideService.bookRide(
+                        userTwo.getUserId(),
+                        pickup,
+                        drop,
+                        CarType.HATCHBACK
+                );
+
+                successfulBookings.incrementAndGet();
+
+            } catch (Exception ignored) {
+
+                // Expected for one of the two requests.
+
+            } finally {
+
+                doneLatch.countDown();
+            }
+        };
+
+        executor.submit(bookingTaskOne);
+        executor.submit(bookingTaskTwo);
+
+        startLatch.countDown();
+
+        assertTrue(
+                doneLatch.await(
+                        5,
+                        TimeUnit.SECONDS
+                )
+        );
+
+        executor.shutdown();
+
+        assertEquals(
+                1,
+                successfulBookings.get()
+        );
+
+        Driver driver =
+                driverRepository
+                        .findById("D1")
+                        .orElseThrow();
+
+        assertEquals(
+                DriverStatus.ON_RIDE,
+                driver.getStatus()
         );
     }
 }

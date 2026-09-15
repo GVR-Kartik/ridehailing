@@ -12,4 +12,12 @@ public interface DriverRepository {
     Optional<Driver> findById(String driverId);
 
     List<Driver> findAll();
+
+    /*
+     * Atomically changes AVAILABLE -> ON_RIDE.
+     *
+     * Returns true when reservation succeeds.
+     * Returns false when the driver was already reserved.
+     */
+    boolean reserveDriver(String driverId);
 }

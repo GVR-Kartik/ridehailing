@@ -19,10 +19,13 @@ import com.kartik.ridehailing.service.CouponService;
 import com.kartik.ridehailing.service.DriverService;
 import com.kartik.ridehailing.service.RideService;
 import com.kartik.ridehailing.service.UserService;
+import com.kartik.ridehailing.strategy.cancellation.FixedCancellationPolicy;
 import com.kartik.ridehailing.strategy.matching.DriverMatchingStrategy;
 import com.kartik.ridehailing.strategy.matching.NearestDriverMatchingStrategy;
 import com.kartik.ridehailing.strategy.pricing.PricingStrategy;
 import com.kartik.ridehailing.strategy.pricing.TieredPricingStrategy;
+import com.kartik.ridehailing.strategy.surge.DemandSupplySurgeMultiplierProvider;
+import com.kartik.ridehailing.strategy.surge.SurgePricingStrategy;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -30,7 +33,8 @@ import java.util.Scanner;
 
 public class Main {
 
-    private final Scanner scanner = new Scanner(System.in);
+    private final Scanner scanner =
+            new Scanner(System.in);
 
     private final UserRepository userRepository =
             new InMemoryUserRepository();
@@ -53,12 +57,46 @@ public class Main {
     private final CouponService couponService =
             new CouponService(couponRepository);
 
+    private final DemandSupplySurgeMultiplierProvider
+            surgeMultiplierProvider =
+            new DemandSupplySurgeMultiplierProvider();
+
     private final RideService rideService;
 
     public Main() {
 
+        PricingStrategy pricingStrategy =
+                createPricingStrategy();
+
+        DriverMatchingStrategy matchingStrategy =
+                new NearestDriverMatchingStrategy();
+
+        rideService =
+                new RideService(
+                        userRepository,
+                        driverRepository,
+                        rideRepository,
+                        matchingStrategy,
+                        pricingStrategy,
+                        couponService,
+                        new FixedCancellationPolicy(
+                                BigDecimal.valueOf(20)
+                        )
+                );
+    }
+
+    public static void main(String[] args) {
+
+        Main application =
+                new Main();
+
+        application.start();
+    }
+
+    private PricingStrategy createPricingStrategy() {
+
         /*
-         * Pricing configuration
+         * Base pricing:
          *
          *              0-2 km    2-5 km    >5 km
          * Hatchback     ₹10        ₹8        ₹5
@@ -66,28 +104,6 @@ public class Main {
          *
          * Minimum fare = ₹50
          */
-        PricingStrategy pricingStrategy =
-                createPricingStrategy();
-
-        DriverMatchingStrategy matchingStrategy =
-                new NearestDriverMatchingStrategy();
-
-        rideService = new RideService(
-                userRepository,
-                driverRepository,
-                rideRepository,
-                matchingStrategy,
-                pricingStrategy,
-                couponService
-        );
-    }
-
-    public static void main(String[] args) {
-        Main application = new Main();
-        application.start();
-    }
-
-    private PricingStrategy createPricingStrategy() {
 
         BigDecimal hatchbackFirstTierRate =
                 BigDecimal.valueOf(10);
@@ -107,6 +123,16 @@ public class Main {
         BigDecimal sedanThirdTierRate =
                 BigDecimal.valueOf(7);
 
+        PricingStrategy basePricing =
+                new TieredPricingStrategy(
+                        hatchbackFirstTierRate,
+                        hatchbackSecondTierRate,
+                        hatchbackThirdTierRate,
+                        sedanFirstTierRate,
+                        sedanSecondTierRate,
+                        sedanThirdTierRate
+                );
+
         printPricingConfiguration(
                 hatchbackFirstTierRate,
                 hatchbackSecondTierRate,
@@ -116,13 +142,9 @@ public class Main {
                 sedanThirdTierRate
         );
 
-        return new TieredPricingStrategy(
-                hatchbackFirstTierRate,
-                hatchbackSecondTierRate,
-                hatchbackThirdTierRate,
-                sedanFirstTierRate,
-                sedanSecondTierRate,
-                sedanThirdTierRate
+        return new SurgePricingStrategy(
+                basePricing,
+                surgeMultiplierProvider
         );
     }
 
@@ -165,6 +187,12 @@ public class Main {
 
         System.out.println("----------------------------------------");
         System.out.println("Minimum Fare: ₹50");
+        System.out.println(
+                "Initial Surge Multiplier: "
+                        + surgeMultiplierProvider.getMultiplier()
+                        + "x"
+        );
+        System.out.println("Cancellation Fee: ₹20");
         System.out.println("========================================");
         System.out.println();
     }
@@ -179,7 +207,8 @@ public class Main {
 
             printMenu();
 
-            String choice = scanner.nextLine().trim();
+            String choice =
+                    scanner.nextLine().trim();
 
             try {
 
@@ -206,35 +235,50 @@ public class Main {
                         break;
 
                     case "6":
-                        viewUserRideHistory();
+                        cancelRide();
                         break;
 
                     case "7":
-                        viewDriverRideHistory();
+                        viewUserRideHistory();
                         break;
 
                     case "8":
-                        addCoupon();
+                        viewDriverRideHistory();
                         break;
 
                     case "9":
-                        deleteCoupon();
+                        addCoupon();
                         break;
 
                     case "10":
+                        deleteCoupon();
+                        break;
+
+                    case "11":
                         viewCoupons();
                         break;
 
+                    case "12":
+                        updateSurgeDemandAndSupply();
+                        break;
+
                     case "0":
-                        System.out.println("Exiting application...");
+                        System.out.println(
+                                "Exiting application..."
+                        );
                         return;
 
                     default:
-                        System.out.println("Invalid option.");
+                        System.out.println(
+                                "Invalid option."
+                        );
                 }
 
             } catch (Exception e) {
-                System.out.println("Error: " + e.getMessage());
+
+                System.out.println(
+                        "Error: " + e.getMessage()
+                );
             }
 
             System.out.println();
@@ -250,11 +294,13 @@ public class Main {
         System.out.println("3. Update Driver Location");
         System.out.println("4. Book Ride");
         System.out.println("5. End Ride");
-        System.out.println("6. View User Ride History");
-        System.out.println("7. View Driver Ride History");
-        System.out.println("8. Add Coupon");
-        System.out.println("9. Delete Coupon");
-        System.out.println("10. View Coupons");
+        System.out.println("6. Cancel Ride");
+        System.out.println("7. View User Ride History");
+        System.out.println("8. View Driver Ride History");
+        System.out.println("9. Add Coupon");
+        System.out.println("10. Delete Coupon");
+        System.out.println("11. View Coupons");
+        System.out.println("12. Update Surge Demand/Supply");
         System.out.println("0. Exit");
         System.out.println("-----------------------------------");
         System.out.print("Enter choice: ");
@@ -269,7 +315,10 @@ public class Main {
         String name = scanner.nextLine();
 
         User user =
-                userService.registerUser(id, name);
+                userService.registerUser(
+                        id,
+                        name
+                );
 
         System.out.println(
                 "User registered successfully: "
@@ -286,23 +335,41 @@ public class Main {
         String name = scanner.nextLine();
 
         System.out.print("Enter vehicle number: ");
-        String vehicleNumber = scanner.nextLine();
+        String vehicleNumber =
+                scanner.nextLine();
 
-        CarType carType = readCarType();
+        CarType carType =
+                readCarType();
 
-        System.out.print("Enter current latitude: ");
+        System.out.print(
+                "Enter current latitude: "
+        );
+
         double latitude =
-                Double.parseDouble(scanner.nextLine());
+                Double.parseDouble(
+                        scanner.nextLine()
+                );
 
-        System.out.print("Enter current longitude: ");
+        System.out.print(
+                "Enter current longitude: "
+        );
+
         double longitude =
-                Double.parseDouble(scanner.nextLine());
+                Double.parseDouble(
+                        scanner.nextLine()
+                );
 
         Vehicle vehicle =
-                new Vehicle(vehicleNumber, carType);
+                new Vehicle(
+                        vehicleNumber,
+                        carType
+                );
 
         Location location =
-                new Location(latitude, longitude);
+                new Location(
+                        latitude,
+                        longitude
+                );
 
         Driver driver =
                 driverService.registerDriver(
@@ -321,15 +388,20 @@ public class Main {
     private void updateDriverLocation() {
 
         System.out.print("Enter driver ID: ");
-        String driverId = scanner.nextLine();
+        String driverId =
+                scanner.nextLine();
 
         System.out.print("Enter latitude: ");
         double latitude =
-                Double.parseDouble(scanner.nextLine());
+                Double.parseDouble(
+                        scanner.nextLine()
+                );
 
         System.out.print("Enter longitude: ");
         double longitude =
-                Double.parseDouble(scanner.nextLine());
+                Double.parseDouble(
+                        scanner.nextLine()
+                );
 
         driverService.updateDriverLocation(
                 driverId,
@@ -347,28 +419,51 @@ public class Main {
     private void bookRide() {
 
         System.out.print("Enter user ID: ");
-        String userId = scanner.nextLine();
-
-        System.out.print("Enter pickup latitude: ");
-        double pickupLatitude =
-                Double.parseDouble(scanner.nextLine());
-
-        System.out.print("Enter pickup longitude: ");
-        double pickupLongitude =
-                Double.parseDouble(scanner.nextLine());
-
-        System.out.print("Enter drop latitude: ");
-        double dropLatitude =
-                Double.parseDouble(scanner.nextLine());
-
-        System.out.print("Enter drop longitude: ");
-        double dropLongitude =
-                Double.parseDouble(scanner.nextLine());
-
-        CarType requestedCarType = readCarType();
+        String userId =
+                scanner.nextLine();
 
         System.out.print(
-                "Enter coupon code (press Enter for none): "
+                "Enter pickup latitude: "
+        );
+
+        double pickupLatitude =
+                Double.parseDouble(
+                        scanner.nextLine()
+                );
+
+        System.out.print(
+                "Enter pickup longitude: "
+        );
+
+        double pickupLongitude =
+                Double.parseDouble(
+                        scanner.nextLine()
+                );
+
+        System.out.print(
+                "Enter drop latitude: "
+        );
+
+        double dropLatitude =
+                Double.parseDouble(
+                        scanner.nextLine()
+                );
+
+        System.out.print(
+                "Enter drop longitude: "
+        );
+
+        double dropLongitude =
+                Double.parseDouble(
+                        scanner.nextLine()
+                );
+
+        CarType requestedCarType =
+                readCarType();
+
+        System.out.print(
+                "Enter coupon code "
+                        + "(press Enter for none): "
         );
 
         String couponCode =
@@ -394,35 +489,53 @@ public class Main {
                 );
 
         System.out.println();
-        System.out.println("Ride booked successfully!");
-        System.out.println("-----------------------------------");
-        System.out.println("Ride ID: " + ride.getRideId());
         System.out.println(
-                "Driver: " + ride.getDriver().getName()
+                "Ride booked successfully!"
         );
+        System.out.println(
+                "-----------------------------------"
+        );
+
+        System.out.println(
+                "Ride ID: "
+                        + ride.getRideId()
+        );
+
+        System.out.println(
+                "Driver: "
+                        + ride.getDriver().getName()
+        );
+
         System.out.println(
                 "Requested Car: "
                         + ride.getRequestedCarType()
         );
+
         System.out.println(
                 "Actual Car: "
                         + ride.getActualCarType()
         );
+
         System.out.println(
                 "Status: "
                         + ride.getStatus()
         );
+
         System.out.printf(
                 "Fare: ₹%.2f%n",
                 ride.getFare()
         );
-        System.out.println("-----------------------------------");
+
+        System.out.println(
+                "-----------------------------------"
+        );
     }
 
     private void endRide() {
 
         System.out.print("Enter ride ID: ");
-        String rideId = scanner.nextLine();
+        String rideId =
+                scanner.nextLine();
 
         BigDecimal fare =
                 rideService.endRide(rideId);
@@ -431,39 +544,108 @@ public class Main {
                 rideService.getRide(rideId);
 
         System.out.println();
-        System.out.println("Ride completed successfully!");
-        System.out.println("-----------------------------------");
         System.out.println(
-                "Ride ID: " + ride.getRideId()
+                "Ride completed successfully!"
         );
+
         System.out.println(
-                "Driver: " + ride.getDriver().getName()
+                "-----------------------------------"
         );
+
         System.out.println(
-                "Status: " + ride.getStatus()
+                "Ride ID: "
+                        + ride.getRideId()
         );
+
+        System.out.println(
+                "Driver: "
+                        + ride.getDriver().getName()
+        );
+
+        System.out.println(
+                "Status: "
+                        + ride.getStatus()
+        );
+
         System.out.printf(
                 "Final Fare: ₹%.2f%n",
                 fare
         );
-        System.out.println("-----------------------------------");
+
+        System.out.println(
+                "-----------------------------------"
+        );
+    }
+
+    private void cancelRide() {
+
+        System.out.print("Enter ride ID: ");
+        String rideId =
+                scanner.nextLine();
+
+        BigDecimal cancellationFee =
+                rideService.cancelRide(rideId);
+
+        Ride ride =
+                rideService.getRide(rideId);
+
+        System.out.println();
+        System.out.println(
+                "Ride cancelled successfully!"
+        );
+
+        System.out.println(
+                "-----------------------------------"
+        );
+
+        System.out.println(
+                "Ride ID: "
+                        + ride.getRideId()
+        );
+
+        System.out.println(
+                "Status: "
+                        + ride.getStatus()
+        );
+
+        System.out.printf(
+                "Cancellation Fee: ₹%.2f%n",
+                cancellationFee
+        );
+
+        System.out.println(
+                "Driver is now AVAILABLE."
+        );
+
+        System.out.println(
+                "-----------------------------------"
+        );
     }
 
     private void viewUserRideHistory() {
 
         System.out.print("Enter user ID: ");
-        String userId = scanner.nextLine();
+        String userId =
+                scanner.nextLine();
 
         List<Ride> rides =
-                rideService.getUserRideHistory(userId);
+                rideService.getUserRideHistory(
+                        userId
+                );
 
         if (rides.isEmpty()) {
-            System.out.println("No rides found.");
+
+            System.out.println(
+                    "No rides found."
+            );
+
             return;
         }
 
         System.out.println();
-        System.out.println("USER RIDE HISTORY");
+        System.out.println(
+                "USER RIDE HISTORY"
+        );
 
         for (Ride ride : rides) {
             printRide(ride);
@@ -472,19 +654,31 @@ public class Main {
 
     private void viewDriverRideHistory() {
 
-        System.out.print("Enter driver ID: ");
-        String driverId = scanner.nextLine();
+        System.out.print(
+                "Enter driver ID: "
+        );
+
+        String driverId =
+                scanner.nextLine();
 
         List<Ride> rides =
-                rideService.getDriverRideHistory(driverId);
+                rideService.getDriverRideHistory(
+                        driverId
+                );
 
         if (rides.isEmpty()) {
-            System.out.println("No rides found.");
+
+            System.out.println(
+                    "No rides found."
+            );
+
             return;
         }
 
         System.out.println();
-        System.out.println("DRIVER RIDE HISTORY");
+        System.out.println(
+                "DRIVER RIDE HISTORY"
+        );
 
         for (Ride ride : rides) {
             printRide(ride);
@@ -493,18 +687,23 @@ public class Main {
 
     private void printRide(Ride ride) {
 
-        System.out.println("-----------------------------------");
-
         System.out.println(
-                "Ride ID: " + ride.getRideId()
+                "-----------------------------------"
         );
 
         System.out.println(
-                "User: " + ride.getUser().getName()
+                "Ride ID: "
+                        + ride.getRideId()
         );
 
         System.out.println(
-                "Driver: " + ride.getDriver().getName()
+                "User: "
+                        + ride.getUser().getName()
+        );
+
+        System.out.println(
+                "Driver: "
+                        + ride.getDriver().getName()
         );
 
         System.out.println(
@@ -518,28 +717,44 @@ public class Main {
         );
 
         System.out.println(
-                "Status: " + ride.getStatus()
+                "Status: "
+                        + ride.getStatus()
         );
 
         if (ride.getFare() != null) {
+
             System.out.printf(
                     "Fare: ₹%.2f%n",
                     ride.getFare()
+            );
+        }
+
+        if (ride.getCancellationFee() != null) {
+
+            System.out.printf(
+                    "Cancellation Fee: ₹%.2f%n",
+                    ride.getCancellationFee()
             );
         }
     }
 
     private void addCoupon() {
 
-        System.out.print("Enter coupon code: ");
-        String code = scanner.nextLine();
+        System.out.print(
+                "Enter coupon code: "
+        );
+
+        String code =
+                scanner.nextLine();
 
         System.out.print(
                 "Enter discount percentage: "
         );
 
         BigDecimal discount =
-                new BigDecimal(scanner.nextLine());
+                new BigDecimal(
+                        scanner.nextLine()
+                );
 
         Coupon coupon =
                 couponService.addCoupon(
@@ -558,8 +773,12 @@ public class Main {
 
     private void deleteCoupon() {
 
-        System.out.print("Enter coupon code: ");
-        String code = scanner.nextLine();
+        System.out.print(
+                "Enter coupon code: "
+        );
+
+        String code =
+                scanner.nextLine();
 
         couponService.deleteCoupon(code);
 
@@ -574,12 +793,18 @@ public class Main {
                 couponService.getAllCoupons();
 
         if (coupons.isEmpty()) {
-            System.out.println("No coupons available.");
+
+            System.out.println(
+                    "No coupons available."
+            );
+
             return;
         }
 
         System.out.println();
-        System.out.println("AVAILABLE COUPONS");
+        System.out.println(
+                "AVAILABLE COUPONS"
+        );
 
         for (Coupon coupon : coupons) {
 
@@ -592,12 +817,64 @@ public class Main {
         }
     }
 
+    private void updateSurgeDemandAndSupply() {
+
+        System.out.print(
+                "Enter current demand: "
+        );
+
+        int demand =
+                Integer.parseInt(
+                        scanner.nextLine()
+                );
+
+        System.out.print(
+                "Enter available drivers: "
+        );
+
+        int availableDrivers =
+                Integer.parseInt(
+                        scanner.nextLine()
+                );
+
+        surgeMultiplierProvider
+                .updateDemandAndSupply(
+                        demand,
+                        availableDrivers
+                );
+
+        System.out.println();
+
+        System.out.println(
+                "Surge configuration updated."
+        );
+
+        System.out.println(
+                "Demand: "
+                        + surgeMultiplierProvider.getDemand()
+        );
+
+        System.out.println(
+                "Available Drivers: "
+                        + surgeMultiplierProvider
+                                .getAvailableDrivers()
+        );
+
+        System.out.println(
+                "Current Surge Multiplier: "
+                        + surgeMultiplierProvider
+                                .getMultiplier()
+                        + "x"
+        );
+    }
+
     private CarType readCarType() {
 
         while (true) {
 
             System.out.print(
-                    "Enter car type (HATCHBACK/SEDAN): "
+                    "Enter car type "
+                            + "(HATCHBACK/SEDAN): "
             );
 
             String input =
@@ -607,7 +884,9 @@ public class Main {
 
             try {
 
-                return CarType.valueOf(input);
+                return CarType.valueOf(
+                        input
+                );
 
             } catch (IllegalArgumentException e) {
 

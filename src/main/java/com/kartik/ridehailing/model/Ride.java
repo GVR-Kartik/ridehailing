@@ -19,6 +19,7 @@ public class Ride {
 
     private RideStatus status;
     private BigDecimal fare;
+    private BigDecimal cancellationFee;
 
     public Ride(
             String rideId,
@@ -82,19 +83,53 @@ public class Ride {
         return fare;
     }
 
+    public BigDecimal getCancellationFee() {
+        return cancellationFee;
+    }
+
     /*
-     * Fare is finalized when the ride starts because the coupon
-     * is applied at booking time.
+     * Fare is finalized at booking time because the coupon
+     * is applied when the ride starts.
      */
     public void setFare(BigDecimal fare) {
+
         if (fare == null) {
-            throw new IllegalArgumentException("Fare cannot be null");
+            throw new IllegalArgumentException(
+                    "Fare cannot be null"
+            );
         }
 
         this.fare = fare;
     }
 
     public void complete() {
+
+        if (status != RideStatus.ONGOING) {
+            throw new IllegalStateException(
+                    "Only an ongoing ride can be completed"
+            );
+        }
+
         this.status = RideStatus.COMPLETED;
+    }
+
+    public void cancel(BigDecimal cancellationFee) {
+
+        if (status != RideStatus.ONGOING) {
+            throw new IllegalStateException(
+                    "Only an ongoing ride can be cancelled"
+            );
+        }
+
+        if (cancellationFee == null
+                || cancellationFee.compareTo(BigDecimal.ZERO) < 0) {
+
+            throw new IllegalArgumentException(
+                    "Cancellation fee cannot be negative"
+            );
+        }
+
+        this.cancellationFee = cancellationFee;
+        this.status = RideStatus.CANCELLED;
     }
 }
