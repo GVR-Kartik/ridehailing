@@ -8,46 +8,99 @@ import java.math.RoundingMode;
 public class TieredPricingStrategy implements PricingStrategy {
 
     private static final BigDecimal MINIMUM_FARE = BigDecimal.valueOf(50);
-    private static final BigDecimal FIRST_TIER_RATE = BigDecimal.valueOf(10);
-    private static final BigDecimal SECOND_TIER_RATE = BigDecimal.valueOf(8);
-    private static final BigDecimal THIRD_TIER_RATE = BigDecimal.valueOf(5);
+
+    private final BigDecimal hatchbackFirstTierRate;
+    private final BigDecimal hatchbackSecondTierRate;
+    private final BigDecimal hatchbackThirdTierRate;
+
+    private final BigDecimal sedanFirstTierRate;
+    private final BigDecimal sedanSecondTierRate;
+    private final BigDecimal sedanThirdTierRate;
+
+    public TieredPricingStrategy(
+            BigDecimal hatchbackFirstTierRate,
+            BigDecimal hatchbackSecondTierRate,
+            BigDecimal hatchbackThirdTierRate,
+            BigDecimal sedanFirstTierRate,
+            BigDecimal sedanSecondTierRate,
+            BigDecimal sedanThirdTierRate) {
+
+        this.hatchbackFirstTierRate = hatchbackFirstTierRate;
+        this.hatchbackSecondTierRate = hatchbackSecondTierRate;
+        this.hatchbackThirdTierRate = hatchbackThirdTierRate;
+
+        this.sedanFirstTierRate = sedanFirstTierRate;
+        this.sedanSecondTierRate = sedanSecondTierRate;
+        this.sedanThirdTierRate = sedanThirdTierRate;
+    }
 
     @Override
-    public BigDecimal calculateFare(double distanceInKm, CarType carType) {
+    public BigDecimal calculateFare(
+            double distanceInKm,
+            CarType carType) {
+
         if (distanceInKm < 0) {
-            throw new IllegalArgumentException("Distance cannot be negative");
+            throw new IllegalArgumentException(
+                    "Distance cannot be negative"
+            );
         }
 
         if (carType == null) {
-            throw new IllegalArgumentException("Car type cannot be null");
+            throw new IllegalArgumentException(
+                    "Car type cannot be null"
+            );
         }
 
-        BigDecimal distance = BigDecimal.valueOf(distanceInKm);
+        BigDecimal firstTierRate;
+        BigDecimal secondTierRate;
+        BigDecimal thirdTierRate;
+
+        if (carType == CarType.HATCHBACK) {
+            firstTierRate = hatchbackFirstTierRate;
+            secondTierRate = hatchbackSecondTierRate;
+            thirdTierRate = hatchbackThirdTierRate;
+        } else {
+            firstTierRate = sedanFirstTierRate;
+            secondTierRate = sedanSecondTierRate;
+            thirdTierRate = sedanThirdTierRate;
+        }
+
+        BigDecimal distance =
+                BigDecimal.valueOf(distanceInKm);
 
         BigDecimal fare;
 
         if (distance.compareTo(BigDecimal.valueOf(2)) <= 0) {
-            fare = distance.multiply(FIRST_TIER_RATE);
+
+            fare = distance.multiply(firstTierRate);
+
         } else if (distance.compareTo(BigDecimal.valueOf(5)) <= 0) {
-            fare = BigDecimal.valueOf(2).multiply(FIRST_TIER_RATE)
+
+            fare = BigDecimal.valueOf(2)
+                    .multiply(firstTierRate)
                     .add(
-                            distance.subtract(BigDecimal.valueOf(2))
-                                    .multiply(SECOND_TIER_RATE)
+                            distance
+                                    .subtract(BigDecimal.valueOf(2))
+                                    .multiply(secondTierRate)
                     );
+
         } else {
-            fare = BigDecimal.valueOf(2).multiply(FIRST_TIER_RATE)
+
+            fare = BigDecimal.valueOf(2)
+                    .multiply(firstTierRate)
                     .add(
-                            BigDecimal.valueOf(3).multiply(SECOND_TIER_RATE)
+                            BigDecimal.valueOf(3)
+                                    .multiply(secondTierRate)
                     )
                     .add(
-                            distance.subtract(BigDecimal.valueOf(5))
-                                    .multiply(THIRD_TIER_RATE)
+                            distance
+                                    .subtract(BigDecimal.valueOf(5))
+                                    .multiply(thirdTierRate)
                     );
         }
 
-        // Sedan pricing is intentionally kept the same for now.
-        // The assessment requirements don't specify a Sedan multiplier.
-        return fare.max(MINIMUM_FARE)
+        return fare
+                .max(MINIMUM_FARE)
                 .setScale(2, RoundingMode.HALF_UP);
     }
 }

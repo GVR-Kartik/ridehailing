@@ -27,12 +27,14 @@ public class RideService {
     private final PricingStrategy pricingStrategy;
     private final CouponService couponService;
 
-    public RideService(UserRepository userRepository,
-                       DriverRepository driverRepository,
-                       RideRepository rideRepository,
-                       DriverMatchingStrategy driverMatchingStrategy,
-                       PricingStrategy pricingStrategy,
-                       CouponService couponService) {
+    public RideService(
+            UserRepository userRepository,
+            DriverRepository driverRepository,
+            RideRepository rideRepository,
+            DriverMatchingStrategy driverMatchingStrategy,
+            PricingStrategy pricingStrategy,
+            CouponService couponService) {
+
         this.userRepository = userRepository;
         this.driverRepository = driverRepository;
         this.rideRepository = rideRepository;
@@ -41,34 +43,81 @@ public class RideService {
         this.couponService = couponService;
     }
 
-    public Ride bookRide(String userId,
-                         Location pickupLocation,
-                         Location dropLocation,
-                         CarType requestedCarType) {
+    public Ride bookRide(
+            String userId,
+            Location pickupLocation,
+            Location dropLocation,
+            CarType requestedCarType,
+            String couponCode) {
 
         User user = userRepository.findById(userId)
                 .orElseThrow(() ->
-                        new IllegalArgumentException("User not found: " + userId));
+                        new IllegalArgumentException(
+                                "User not found: " + userId
+                        ));
 
         if (pickupLocation == null || dropLocation == null) {
             throw new IllegalArgumentException(
-                    "Pickup and drop locations are required");
+                    "Pickup and drop locations are required"
+            );
         }
 
         if (requestedCarType == null) {
-            throw new IllegalArgumentException("Car type is required");
+            throw new IllegalArgumentException(
+                    "Car type is required"
+            );
         }
 
+        /*
+         * Validate and resolve the driver before changing driver state.
+         */
         List<Driver> drivers = driverRepository.findAll();
 
         Driver driver = driverMatchingStrategy
-                .findDriver(drivers, pickupLocation, requestedCarType)
+                .findDriver(
+                        drivers,
+                        pickupLocation,
+                        requestedCarType
+                )
                 .orElseThrow(() ->
-                        new IllegalArgumentException("No driver available"));
+                        new IllegalArgumentException(
+                                "No driver available"
+                        ));
 
-        CarType actualCarType = driver.getVehicle().getCarType();
+        CarType actualCarType =
+                driver.getVehicle().getCarType();
 
-        // Reserve the driver for this ride.
+        /*
+         * Calculate fare at booking time because the coupon
+         * must be applied when the ride starts.
+         */
+        double distance = DistanceCalculator.calculate(
+                pickupLocation,
+                dropLocation
+        );
+
+        BigDecimal fare = pricingStrategy.calculateFare(
+                distance,
+                actualCarType
+        );
+
+        /*
+         * Validate and apply coupon BEFORE reserving the driver.
+         *
+         * This prevents an invalid coupon from leaving the
+         * selected driver stuck in ON_RIDE state.
+         */
+        if (couponCode != null && !couponCode.isBlank()) {
+            fare = couponService.applyCoupon(
+                    couponCode,
+                    fare
+            );
+        }
+
+        /*
+         * Only reserve the driver after every booking validation
+         * has succeeded.
+         */
         driver.setStatus(DriverStatus.ON_RIDE);
         driverRepository.save(driver);
 
@@ -82,54 +131,65 @@ public class RideService {
                 actualCarType
         );
 
+        ride.setFare(fare);
+
         rideRepository.save(ride);
 
         return ride;
     }
 
-    public BigDecimal endRide(String rideId) {
-        return endRide(rideId, null);
+    /*
+     * Convenience overload when no coupon is required.
+     */
+    public Ride bookRide(
+            String userId,
+            Location pickupLocation,
+            Location dropLocation,
+            CarType requestedCarType) {
+
+        return bookRide(
+                userId,
+                pickupLocation,
+                dropLocation,
+                requestedCarType,
+                null
+        );
     }
 
-    public BigDecimal endRide(String rideId, String couponCode) {
+    public BigDecimal endRide(String rideId) {
 
         Ride ride = rideRepository.findById(rideId)
                 .orElseThrow(() ->
-                        new IllegalArgumentException("Ride not found: " + rideId));
+                        new IllegalArgumentException(
+                                "Ride not found: " + rideId
+                        ));
 
         if (ride.getStatus() != RideStatus.ONGOING) {
-            throw new IllegalArgumentException("Ride is already completed");
+            throw new IllegalArgumentException(
+                    "Ride is already completed"
+            );
         }
 
-        // Calculate trip distance using pickup and drop locations.
-        double distance = DistanceCalculator.calculate(
-                ride.getPickupLocation(),
+        /*
+         * Fare was already calculated when the ride started.
+         * End ride only completes the ride and releases the driver.
+         */
+        ride.complete();
+
+        Driver driver = ride.getDriver();
+
+        driver.updateLocation(
                 ride.getDropLocation()
         );
 
-        // Calculate fare using the actual vehicle type.
-        BigDecimal fare = pricingStrategy.calculateFare(
-                distance,
-                ride.getActualCarType()
+        driver.setStatus(
+                DriverStatus.AVAILABLE
         );
-
-        // Apply coupon if provided.
-        if (couponCode != null && !couponCode.isBlank()) {
-            fare = couponService.applyCoupon(couponCode, fare);
-        }
-
-        // Complete the ride.
-        ride.complete(fare);
-
-        // Driver becomes available at the ride's drop location.
-        Driver driver = ride.getDriver();
-        driver.updateLocation(ride.getDropLocation());
-        driver.setStatus(DriverStatus.AVAILABLE);
 
         driverRepository.save(driver);
         rideRepository.save(ride);
 
-        return fare;
+        return ride.getFare();
     }
 
     public List<Ride> getUserRideHistory(String userId) {
@@ -141,8 +201,11 @@ public class RideService {
     }
 
     public Ride getRide(String rideId) {
+
         return rideRepository.findById(rideId)
                 .orElseThrow(() ->
-                        new IllegalArgumentException("Ride not found: " + rideId));
+                        new IllegalArgumentException(
+                                "Ride not found: " + rideId
+                        ));
     }
 }

@@ -43,6 +43,13 @@ public class Ride {
         return rideId;
     }
 
+    /*
+     * Alias used by the CLI.
+     */
+    public String getId() {
+        return rideId;
+    }
+
     public User getUser() {
         return user;
     }
@@ -75,8 +82,19 @@ public class Ride {
         return fare;
     }
 
-    public void complete(BigDecimal fare) {
+    /*
+     * Fare is finalized when the ride starts because the coupon
+     * is applied at booking time.
+     */
+    public void setFare(BigDecimal fare) {
+        if (fare == null) {
+            throw new IllegalArgumentException("Fare cannot be null");
+        }
+
         this.fare = fare;
+    }
+
+    public void complete() {
         this.status = RideStatus.COMPLETED;
     }
 }
