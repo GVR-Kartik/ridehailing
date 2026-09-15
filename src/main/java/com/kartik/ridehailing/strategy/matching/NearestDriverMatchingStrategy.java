@@ -4,6 +4,7 @@ import com.kartik.ridehailing.enums.CarType;
 import com.kartik.ridehailing.enums.DriverStatus;
 import com.kartik.ridehailing.model.Driver;
 import com.kartik.ridehailing.model.Location;
+import com.kartik.ridehailing.util.DistanceCalculator;
 
 import java.util.Comparator;
 import java.util.List;
@@ -19,54 +20,43 @@ public class NearestDriverMatchingStrategy implements DriverMatchingStrategy {
             Location pickupLocation,
             CarType requestedCarType) {
 
-        return drivers.stream()
+        // First try to find the nearest driver with the exact
+        // requested car type.
+        Optional<Driver> exactMatch = drivers.stream()
                 .filter(driver -> driver.getStatus() == DriverStatus.AVAILABLE)
-                .filter(driver -> isEligibleCarType(
-                        driver.getVehicle().getCarType(),
-                        requestedCarType))
                 .filter(driver ->
-                        calculateDistance(
+                        driver.getVehicle().getCarType() == requestedCarType)
+                .filter(driver ->
+                        DistanceCalculator.calculate(
                                 driver.getCurrentLocation(),
                                 pickupLocation) <= MAX_RADIUS_KM)
                 .min(Comparator.comparingDouble(driver ->
-                        calculateDistance(
+                        DistanceCalculator.calculate(
                                 driver.getCurrentLocation(),
                                 pickupLocation)));
-    }
 
-    private boolean isEligibleCarType(
-            CarType actualCarType,
-            CarType requestedCarType) {
-
-        if (actualCarType == requestedCarType) {
-            return true;
+        if (exactMatch.isPresent()) {
+            return exactMatch;
         }
 
-        // Free upgrade: Hatchback request can be fulfilled by Sedan.
-        return requestedCarType == CarType.HATCHBACK
-                && actualCarType == CarType.SEDAN;
-    }
+        // Free upgrade: if Hatchback is requested but no Hatchback
+        // is available within the radius, allow a Sedan.
+        if (requestedCarType == CarType.HATCHBACK) {
+            return drivers.stream()
+                    .filter(driver ->
+                            driver.getStatus() == DriverStatus.AVAILABLE)
+                    .filter(driver ->
+                            driver.getVehicle().getCarType() == CarType.SEDAN)
+                    .filter(driver ->
+                            DistanceCalculator.calculate(
+                                    driver.getCurrentLocation(),
+                                    pickupLocation) <= MAX_RADIUS_KM)
+                    .min(Comparator.comparingDouble(driver ->
+                            DistanceCalculator.calculate(
+                                    driver.getCurrentLocation(),
+                                    pickupLocation)));
+        }
 
-    private double calculateDistance(Location first, Location second) {
-        final double earthRadiusKm = 6371.0;
-
-        double lat1 = Math.toRadians(first.getLatitude());
-        double lat2 = Math.toRadians(second.getLatitude());
-
-        double deltaLat = Math.toRadians(
-                second.getLatitude() - first.getLatitude());
-
-        double deltaLon = Math.toRadians(
-                second.getLongitude() - first.getLongitude());
-
-        double a = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2)
-                + Math.cos(lat1)
-                * Math.cos(lat2)
-                * Math.sin(deltaLon / 2)
-                * Math.sin(deltaLon / 2);
-
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-        return earthRadiusKm * c;
+        return Optional.empty();
     }
 }

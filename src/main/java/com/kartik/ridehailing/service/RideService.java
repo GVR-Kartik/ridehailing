@@ -12,6 +12,7 @@ import com.kartik.ridehailing.repository.RideRepository;
 import com.kartik.ridehailing.repository.UserRepository;
 import com.kartik.ridehailing.strategy.matching.DriverMatchingStrategy;
 import com.kartik.ridehailing.strategy.pricing.PricingStrategy;
+import com.kartik.ridehailing.util.DistanceCalculator;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -22,19 +23,16 @@ public class RideService {
     private final UserRepository userRepository;
     private final DriverRepository driverRepository;
     private final RideRepository rideRepository;
-
     private final DriverMatchingStrategy driverMatchingStrategy;
     private final PricingStrategy pricingStrategy;
     private final CouponService couponService;
 
-    public RideService(
-            UserRepository userRepository,
-            DriverRepository driverRepository,
-            RideRepository rideRepository,
-            DriverMatchingStrategy driverMatchingStrategy,
-            PricingStrategy pricingStrategy,
-            CouponService couponService) {
-
+    public RideService(UserRepository userRepository,
+                       DriverRepository driverRepository,
+                       RideRepository rideRepository,
+                       DriverMatchingStrategy driverMatchingStrategy,
+                       PricingStrategy pricingStrategy,
+                       CouponService couponService) {
         this.userRepository = userRepository;
         this.driverRepository = driverRepository;
         this.rideRepository = rideRepository;
@@ -43,16 +41,14 @@ public class RideService {
         this.couponService = couponService;
     }
 
-    public Ride bookRide(
-            String userId,
-            Location pickupLocation,
-            Location dropLocation,
-            CarType requestedCarType) {
+    public Ride bookRide(String userId,
+                         Location pickupLocation,
+                         Location dropLocation,
+                         CarType requestedCarType) {
 
         User user = userRepository.findById(userId)
                 .orElseThrow(() ->
-                        new IllegalArgumentException(
-                                "User not found: " + userId));
+                        new IllegalArgumentException("User not found: " + userId));
 
         if (pickupLocation == null || dropLocation == null) {
             throw new IllegalArgumentException(
@@ -60,24 +56,19 @@ public class RideService {
         }
 
         if (requestedCarType == null) {
-            throw new IllegalArgumentException(
-                    "Car type is required");
+            throw new IllegalArgumentException("Car type is required");
         }
 
         List<Driver> drivers = driverRepository.findAll();
 
         Driver driver = driverMatchingStrategy
-                .findDriver(
-                        drivers,
-                        pickupLocation,
-                        requestedCarType)
+                .findDriver(drivers, pickupLocation, requestedCarType)
                 .orElseThrow(() ->
-                        new IllegalArgumentException(
-                                "No driver available"));
+                        new IllegalArgumentException("No driver available"));
 
-        CarType actualCarType =
-                driver.getVehicle().getCarType();
+        CarType actualCarType = driver.getVehicle().getCarType();
 
+        // Reserve the driver for this ride.
         driver.setStatus(DriverStatus.ON_RIDE);
         driverRepository.save(driver);
 
@@ -96,48 +87,43 @@ public class RideService {
         return ride;
     }
 
-    /**
-     * Ends the ride and calculates the final fare
-     * without applying a coupon.
-     */
     public BigDecimal endRide(String rideId) {
         return endRide(rideId, null);
     }
 
-    /**
-     * Ends the ride and optionally applies a coupon.
-     */
-    public BigDecimal endRide(
-            String rideId,
-            String couponCode) {
+    public BigDecimal endRide(String rideId, String couponCode) {
 
         Ride ride = rideRepository.findById(rideId)
                 .orElseThrow(() ->
-                        new IllegalArgumentException(
-                                "Ride not found: " + rideId));
+                        new IllegalArgumentException("Ride not found: " + rideId));
 
         if (ride.getStatus() != RideStatus.ONGOING) {
-            throw new IllegalArgumentException(
-                    "Ride is already completed");
+            throw new IllegalArgumentException("Ride is already completed");
         }
 
-        double distance = calculateDistance(
+        // Calculate trip distance using pickup and drop locations.
+        double distance = DistanceCalculator.calculate(
                 ride.getPickupLocation(),
-                ride.getDropLocation());
+                ride.getDropLocation()
+        );
 
+        // Calculate fare using the actual vehicle type.
         BigDecimal fare = pricingStrategy.calculateFare(
                 distance,
-                ride.getActualCarType());
+                ride.getActualCarType()
+        );
 
+        // Apply coupon if provided.
         if (couponCode != null && !couponCode.isBlank()) {
-            fare = couponService.applyCoupon(
-                    couponCode,
-                    fare);
+            fare = couponService.applyCoupon(couponCode, fare);
         }
 
+        // Complete the ride.
         ride.complete(fare);
 
+        // Driver becomes available at the ride's drop location.
         Driver driver = ride.getDriver();
+        driver.updateLocation(ride.getDropLocation());
         driver.setStatus(DriverStatus.AVAILABLE);
 
         driverRepository.save(driver);
@@ -157,43 +143,6 @@ public class RideService {
     public Ride getRide(String rideId) {
         return rideRepository.findById(rideId)
                 .orElseThrow(() ->
-                        new IllegalArgumentException(
-                                "Ride not found: " + rideId));
-    }
-
-    private double calculateDistance(
-            Location first,
-            Location second) {
-
-        final double earthRadiusKm = 6371.0;
-
-        double lat1 =
-                Math.toRadians(first.getLatitude());
-
-        double lat2 =
-                Math.toRadians(second.getLatitude());
-
-        double deltaLat = Math.toRadians(
-                second.getLatitude()
-                        - first.getLatitude());
-
-        double deltaLon = Math.toRadians(
-                second.getLongitude()
-                        - first.getLongitude());
-
-        double a =
-                Math.sin(deltaLat / 2)
-                        * Math.sin(deltaLat / 2)
-                        + Math.cos(lat1)
-                        * Math.cos(lat2)
-                        * Math.sin(deltaLon / 2)
-                        * Math.sin(deltaLon / 2);
-
-        double c =
-                2 * Math.atan2(
-                        Math.sqrt(a),
-                        Math.sqrt(1 - a));
-
-        return earthRadiusKm * c;
+                        new IllegalArgumentException("Ride not found: " + rideId));
     }
 }
